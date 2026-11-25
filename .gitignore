@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env*
+*.log
+*.tsbuildinfo
+.DS_Store
+.vercel
+
+# Local only
+_original/
+docs/PORTFOLIO.md

@@ -1,0 +1,78 @@
+import { useEffect, useId, useRef, useState } from "react";
+import { searchPlaces, type Place } from "../core/services";
+
+interface Props {
+  label: string;
+  placeholder: string;
+  value: Place | null;
+  onChange: (p: Place | null) => void;
+  locate?: boolean;
+}
+
+export default function PlaceInput({ label, placeholder, value, onChange, locate }: Props) {
+  const id = useId();
+  const [text, setText] = useState("");
+  const [items, setItems] = useState<Place[]>([]);
+  const [active, setActive] = useState(0);
+  const [note, setNote] = useState("");
+  const typing = useRef(false);
+
+  useEffect(() => { typing.current = false; setText(value?.label ?? ""); setItems([]); }, [value]);
+
+  useEffect(() => {
+    if (!typing.current || text.trim().length < 3) { setItems([]); return; }
+    const ctl = new AbortController();
+    const timer = setTimeout(() => {
+      searchPlaces(text, ctl.signal)
+        .then((r) => { setItems(r); setActive(0); setNote(r.length ? "" : "No results in Spain"); })
+        .catch(() => { if (!ctl.signal.aborted) setNote("Place search is not responding. Try an example."); });
+    }, 350);
+    return () => { clearTimeout(timer); ctl.abort(); };
+  }, [text]);
+
+  function useLocation() {
+    if (!navigator.geolocation) { setNote("Your browser does not offer location"); return; }
+    setNote("Finding your location…");
+    navigator.geolocation.getCurrentPosition(
+      (p) => { setNote(""); onChange({ label: "My location", point: [p.coords.longitude, p.coords.latitude] }); },
+      () => setNote("Could not get your location"),
+      { timeout: 10000 },
+    );
+  }
+
+  return (
+    <div className="place">
+      <label htmlFor={id}>{label}</label>
+      <div className="place-row">
+        <input
+          id={id} value={text} placeholder={placeholder} autoComplete="off" role="combobox"
+          aria-expanded={items.length > 0} aria-controls={`${id}-list`}
+          aria-activedescendant={items.length ? `${id}-${active}` : undefined}
+          onChange={(e) => { typing.current = true; setText(e.target.value); setNote(""); }}
+          onKeyDown={(e) => {
+            if (!items.length) return;
+            if (e.key === "ArrowDown") { e.preventDefault(); setActive((active + 1) % items.length); }
+            if (e.key === "ArrowUp") { e.preventDefault(); setActive((active + items.length - 1) % items.length); }
+            if (e.key === "Enter") { e.preventDefault(); onChange(items[active]); }
+            if (e.key === "Escape") setItems([]);
+          }}
+          onBlur={() => setTimeout(() => {
+            setItems([]);
+            // What is shown is always what will be used.
+            if (typing.current) { typing.current = false; setText(value?.label ?? ""); }
+          }, 200)}
+        />
+        {locate && <button type="button" className="icon-btn" onClick={useLocation} aria-label="Use my location">◎</button>}
+      </div>
+      {items.length > 0 && (
+        <ul className="suggest" id={`${id}-list`} role="listbox">
+          {items.map((it, i) => (
+            <li key={i} id={`${id}-${i}`} role="option" aria-selected={i === active}
+              onMouseDown={(e) => { e.preventDefault(); onChange(it); }}>{it.label}</li>
+          ))}
+        </ul>
+      )}
+      {note && <p className="note" role="status">{note}</p>}
+    </div>
+  );
+}
