@@ -25,6 +25,11 @@ Pick up to four needs (fuel, EV charging, gluten-free food, a playground, truck 
 
 It runs on phones and desktops, can be installed, and needs no API keys, accounts or backend of its own. A demo video is in [`videos/route-detour-optimizer.mp4`](videos/route-detour-optimizer.mp4).
 
+### From and to your maps app
+
+- **Out**: every result opens in Google Maps or Apple Maps with the origin, stops and destination. When you start from your current location the origin is left out, so navigation starts where you are.
+- **In (Android)**: install the app from Chrome, then use *Share* on a place in Google Maps and pick **Detours**. Links with coordinates are read directly. Google's short links hide them, so the app searches for the shared name or address and asks you to confirm. iOS does not let installed web apps receive shares.
+
 ## 🧠 How it works
 
 Plain Dijkstra answers "what is the shortest path?". The question here is "where do I stop to refuel, eat and let the kids play while losing the least time?". Each graph state is **(place, needs already covered)**: with 72 places and 4 needs, at most 1,152 states. The shortest path decides at once which stops to make, in which order, where to leave the route and where to rejoin it.

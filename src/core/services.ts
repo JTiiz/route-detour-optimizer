@@ -28,7 +28,12 @@ export async function fetchMatrix(points: LngLat[], signal?: AbortSignal): Promi
   return data.durations;
 }
 
-export interface Place { label: string; point: LngLat }
+export interface Place {
+  label: string;
+  point: LngLat;
+  /** The device's current position. */
+  here?: boolean;
+}
 
 export async function searchPlaces(q: string, signal?: AbortSignal): Promise<Place[]> {
   const data = await getJson(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=en&bbox=-9.6,35.8,4.5,43.9`, signal);

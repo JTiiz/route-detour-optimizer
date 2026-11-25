@@ -7,6 +7,7 @@ import { nearestTime, sliceRoute } from "./core/geo";
 import { appleMaps, googleMaps, waze } from "./core/links";
 import { buildGraph, HALF_WINDOW } from "./core/planner";
 import { fetchRoute, type Place } from "./core/services";
+import { parseShared } from "./core/share";
 import { MAX_NEEDS, NEEDS, type Graph, type LngLat, type NeedId, type Plan, type Route } from "./core/types";
 
 const BASE = import.meta.env.BASE_URL;
@@ -18,6 +19,10 @@ function hm(s: number) {
 }
 const extraText = (s: number) => (s < 60 ? "< 1 min" : `+${Math.round(s / 60)} min`);
 
+// What another app shared, read once and then removed from the address bar.
+const shared = parseShared(new URLSearchParams(location.search));
+if (location.search) history.replaceState(null, "", location.pathname);
+
 interface Result { graph: Graph; plans: Plan[]; ms: number; needs: NeedId[] }
 
 function solve(graph: Graph, needs: NeedId[]): Result {
@@ -28,7 +33,7 @@ function solve(graph: Graph, needs: NeedId[]): Result {
 
 export default function App() {
   const [from, setFrom] = useState<Place | null>(null);
-  const [to, setTo] = useState<Place | null>(null);
+  const [to, setTo] = useState<Place | null>(shared?.place ?? null);
   const [needs, setNeeds] = useState<NeedId[]>(["fuel", "food"]);
   const [route, setRoute] = useState<Route | null>(null);
   const [at, setAt] = useState(0);
@@ -40,6 +45,8 @@ export default function App() {
   const job = useRef<AbortController | null>(null);
   const results = useRef<HTMLElement>(null);
 
+  // From the current position, the maps app can start navigating straight away.
+  const origin = from && !from.here ? from.point : undefined;
   const plan = result?.plans[chosen] ?? null;
 
   function begin(label: string) {
@@ -153,7 +160,10 @@ export default function App() {
         <section>
           <h2>Your route</h2>
           <PlaceInput label="From" placeholder="City or address" value={from} locate onChange={(p) => { setFrom(p); dropRoute(); }} />
-          <PlaceInput label="To" placeholder="City or address" value={to} onChange={(p) => { setTo(p); dropRoute(); }} />
+          <PlaceInput label="To" lookup={shared?.queries} placeholder="City or address" value={to} onChange={(p) => { setTo(p); dropRoute(); }} />
+          {shared && !shared.place && !shared.queries.length && !to && (
+            <p className="note">The shared link does not say which place it is. Type the destination.</p>
+          )}
           {!route && <button className="primary" disabled={!from || !to || !!busy} onClick={trace}>Draw route</button>}
           {route && <p className="summary">{Math.round(route.distance / 1000)} km · {hm(route.duration)} without stops</p>}
         </section>
@@ -215,8 +225,8 @@ export default function App() {
                         ))}
                       </ol>
                       <div className="nav">
-                        {to && <a href={googleMaps(to.point, via)} target="_blank" rel="noreferrer">Google Maps</a>}
-                        {to && <a href={appleMaps(to.point, via)} target="_blank" rel="noreferrer">Apple Maps</a>}
+                        {to && <a href={googleMaps(to.point, via, origin)} target="_blank" rel="noreferrer">Google Maps</a>}
+                        {to && <a href={appleMaps(to.point, via, origin)} target="_blank" rel="noreferrer">Apple Maps</a>}
                         <a href={waze(via)} target="_blank" rel="noreferrer">Waze</a>
                       </div>
                       <small>Waze only takes one destination per link: it goes to the first stop.</small>

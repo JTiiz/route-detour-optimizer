@@ -5,6 +5,7 @@ import { DEMOS } from "../src/core/demos";
 import { findPlan, findPlans, MinHeap } from "../src/core/dijkstra";
 import { metersToSegment, pointAt } from "../src/core/geo";
 import { appleMaps, googleMaps, waze } from "../src/core/links";
+import { parseShared } from "../src/core/share";
 import { bitOf, type Graph, type Poi } from "../src/core/types";
 
 function rng(seed: number) {
@@ -107,10 +108,42 @@ describe("links and examples", () => {
     expect(waze([[-2, 41]])).toContain("ll=41.000000%2C-2.000000");
   });
 
+  it("adds the origin only when there is one", () => {
+    expect(googleMaps([-3, 40], [[-2, 41]], [-1, 42])).toContain("&origin=42.000000%2C-1.000000&destination=");
+    expect(appleMaps([-3, 40], [[-2, 41]], [-1, 42])).toContain("directions?source=42.000000,-1.000000&destination=");
+    expect(googleMaps([-3, 40], [[-2, 41]])).not.toContain("origin");
+    expect(appleMaps([-3, 40], [[-2, 41]])).not.toContain("source");
+  });
+
   it.each(DEMOS)("example $id gives a sensible plan", (d) => {
     const { graph } = JSON.parse(readFileSync(`public/demo/${d.id}.json`, "utf8"));
     const plans = findPlans(graph, d.needs.length);
     expect(plans.length).toBeGreaterThan(0);
     expect(plans[0].extra).toBeLessThan(30 * 60);
+  });
+});
+
+describe("shared places", () => {
+  const share = (o: Record<string, string>) => parseShared(new URLSearchParams(o));
+
+  it("ignores a normal visit", () => expect(share({})).toBeNull());
+
+  it("reads coordinates, preferring the place over the map centre", () => {
+    expect(share({ text: "Alhambra\nhttps://www.google.com/maps/place/Alhambra/@37.1,-3.5,17z/data=!3d37.176!4d-3.588" }))
+      .toEqual({ place: { label: "Alhambra", point: [-3.588, 37.176] }, queries: [] });
+    expect(share({ url: "https://maps.apple.com/place?coordinate=40.4168,-3.7038&name=Sol" })?.place?.point).toEqual([-3.7038, 40.4168]);
+    expect(share({ url: "https://www.google.com/maps/search/?api=1&query=40.5%2C-3.7" })?.place?.point).toEqual([-3.7, 40.5]);
+    expect(share({ text: "40.4168, -3.7038" })?.place?.point).toEqual([-3.7038, 40.4168]);
+  });
+
+  it("falls back to searching the text of a short link", () => {
+    expect(share({ text: "Casa Ojeda\nC. Vitoria, 5, Burgos\nhttps://maps.app.goo.gl/abc123" }))
+      .toEqual({ place: null, queries: ["Casa Ojeda, C. Vitoria, 5, Burgos", "C. Vitoria, 5, Burgos", "Casa Ojeda"] });
+  });
+
+  it("admits it when a short link comes alone or is malformed", () => {
+    expect(share({ text: "https://maps.app.goo.gl/abc123" })).toEqual({ place: null, queries: [] });
+    expect(share({ url: "https://x.test/%E0%A4%A" })).toEqual({ place: null, queries: [] });
+    expect(share({ text: "https://x.test/?q=95.5,-3.7" })?.place).toBeNull();
   });
 });
