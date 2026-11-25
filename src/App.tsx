@@ -3,10 +3,11 @@ import MapView from "./components/MapView";
 import PlaceInput from "./components/PlaceInput";
 import { DEMOS, type Demo, type DemoData } from "./core/demos";
 import { findPlans } from "./core/dijkstra";
-import { nearestTime, sliceRoute } from "./core/geo";
+import { findElsewhere, type Elsewhere } from "./core/elsewhere";
+import { nearestTime, sliceRoute, thin } from "./core/geo";
 import { appleMaps, googleMaps, waze } from "./core/links";
 import { buildGraph, HALF_WINDOW } from "./core/planner";
-import { fetchRoute, type Place } from "./core/services";
+import { fetchRoute, loadPois, type Place } from "./core/services";
 import { parseShared } from "./core/share";
 import { MAX_NEEDS, NEEDS, type Graph, type LngLat, type NeedId, type Plan, type Route } from "./core/types";
 
@@ -23,7 +24,7 @@ const extraText = (s: number) => (s < 60 ? "< 1 min" : `+${Math.round(s / 60)} m
 const shared = parseShared(new URLSearchParams(location.search));
 if (location.search) history.replaceState(null, "", location.pathname);
 
-interface Result { graph: Graph; plans: Plan[]; ms: number; needs: NeedId[] }
+interface Result { graph: Graph; plans: Plan[]; ms: number; needs: NeedId[]; elsewhere?: Elsewhere }
 
 function solve(graph: Graph, needs: NeedId[]): Result {
   const t = performance.now();
@@ -44,6 +45,8 @@ export default function App() {
   const [error, setError] = useState("");
   const job = useRef<AbortController | null>(null);
   const results = useRef<HTMLElement>(null);
+  // Moments already searched without success, for the current route and needs.
+  const tried = useRef<number[]>([]);
 
   // From the current position, the maps app can start navigating straight away.
   const origin = from && !from.here ? from.point : undefined;
@@ -67,6 +70,7 @@ export default function App() {
 
   function dropRoute() {
     job.current?.abort();
+    tried.current = [];
     setBusy(""); setError(""); setRoute(null); setResult(null); setDetour([]);
   }
 
@@ -82,13 +86,22 @@ export default function App() {
     } catch (e) { fail(e, signal); }
   }
 
-  async function search() {
+  async function search(time = at) {
     if (!route || !needs.length) return;
     const signal = begin("Measuring detours by road…");
+    setAt(time);
     try {
-      const graph = await buildGraph(route, at, needs, BASE, signal);
+      const graph = await buildGraph(route, time, needs, BASE, signal);
       if (signal.aborted) return;
-      setResult(solve(graph, needs));
+      const solved = solve(graph, needs);
+      if (!solved.plans.length) {
+        tried.current.push(time);
+        setBusy("Looking along the rest of the trip…");
+        const pois = await loadPois(thin(route.coords, 2000), BASE);
+        if (signal.aborted) return;
+        solved.elsewhere = findElsewhere(route, pois, needs, time, tried.current);
+      }
+      setResult(solved);
       setBusy("");
     } catch (e) { fail(e, signal); }
   }
@@ -101,6 +114,7 @@ export default function App() {
       const data: DemoData = await res.json();
       if (signal.aborted) return;
       setFrom(d.from); setTo(d.to); setNeeds(d.needs);
+      tried.current = [];
       setRoute(data.route); setAt(d.at);
       setResult(solve(data.graph, d.needs));
       setBusy("");
@@ -108,6 +122,7 @@ export default function App() {
   }
 
   function toggle(id: NeedId) {
+    tried.current = [];
     setNeeds((n) => (n.includes(id) ? n.filter((x) => x !== id) : n.length < MAX_NEEDS ? [...n, id] : n));
     stale();
   }
@@ -188,7 +203,7 @@ export default function App() {
             <input id="at" type="range" min={0} max={Math.round(route.duration)} step={60} value={Math.round(at)}
               aria-valuetext={`${hm(at)} after leaving`} onChange={(e) => moveAt(+e.target.value)} />
             <p className="summary">About <b>{hm(at)}</b> after leaving (±25 min). You can also tap the route on the map.</p>
-            <button className="primary" disabled={!needs.length || !!busy} onClick={search}>Find the best stop</button>
+            <button className="primary" disabled={!needs.length || !!busy} onClick={() => search()}>Find the best stop</button>
           </section>
         )}
 
@@ -199,7 +214,25 @@ export default function App() {
           <section ref={results} className="results">
             <h2>{result.plans.length ? "Where to stop" : "No stop covers everything"}</h2>
             {!result.plans.length && (
-              <p>Nothing within 5 km of this stretch covers everything you chose. Change the time or drop a need.</p>
+              <>
+                <p>Around {hm(at)} nothing within 5 km of the route covers everything you chose.</p>
+                {!!result.elsewhere?.times.length && (
+                  <>
+                    <p><b>These moments of the trip should have it all:</b></p>
+                    {result.elsewhere.times.map((t) => (
+                      <button key={t} className="primary" disabled={!!busy} onClick={() => search(t)}>
+                        Stop at {hm(t)} <span className="shift">({hm(Math.abs(t - at))} {t < at ? "earlier" : "later"})</span>
+                      </button>
+                    ))}
+                  </>
+                )}
+                {!!result.elsewhere?.missing.length && (
+                  <p>Nowhere on this route: <b>{result.elsewhere.missing.map((id) => need(id).label).join(", ")}</b>. Remove it to find a stop.</p>
+                )}
+                {result.elsewhere && !result.elsewhere.times.length && !result.elsewhere.missing.length && (
+                  <p>No other moment of this trip has everything close together. Remove one need to find a stop.</p>
+                )}
+              </>
             )}
             {result.plans.length > 0 && <p className="summary">Extra driving minutes. The ranking also counts 4 min of parking per stop.</p>}
             {result.plans.map((p, i) => {

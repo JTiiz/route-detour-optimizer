@@ -1,5 +1,5 @@
 // Only same-origin files are cached: external services always hit the network.
-const CACHE = "detour-v2";
+const CACHE = "detour-v3";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "./manifest.webmanifest", "./icons/icon.svg"])));

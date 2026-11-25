@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildStops } from "../src/core/candidates";
 import { DEMOS } from "../src/core/demos";
 import { findPlan, findPlans, MinHeap } from "../src/core/dijkstra";
-import { metersToSegment, pointAt } from "../src/core/geo";
+import { metersToSegment, pointAt, sliceRoute } from "../src/core/geo";
 import { appleMaps, googleMaps, waze } from "../src/core/links";
+import { HALF_WINDOW } from "../src/core/planner";
+import { findElsewhere } from "../src/core/elsewhere";
 import { parseShared } from "../src/core/share";
 import { bitOf, type Graph, type Poi } from "../src/core/types";
 
@@ -145,5 +147,54 @@ describe("shared places", () => {
     expect(share({ text: "https://maps.app.goo.gl/abc123" })).toEqual({ place: null, queries: [] });
     expect(share({ url: "https://x.test/%E0%A4%A" })).toEqual({ place: null, queries: [] });
     expect(share({ text: "https://x.test/?q=95.5,-3.7" })?.place).toBeNull();
+  });
+});
+
+describe("other moments of the trip", () => {
+  // 10 h along the equator, 1 degree per hour.
+  const coords = Array.from({ length: 1001 }, (_, i): [number, number] => [i / 100, 0]);
+  const route = { coords, cum: coords.map((_, i) => i * 36), duration: 36000, distance: 1 };
+  const poi = (hour: number, mask: number, lat = 0.01): Poi => ({ lng: hour, lat, mask, name: "x" });
+  const both = bitOf("fuel") | bitOf("food");
+
+  it("offers the closest moment before and after, nearest first", () => {
+    const { times } = findElsewhere(route, [poi(2, both), poi(6, both), poi(9, both)], ["fuel", "food"], 5 * 3600);
+    expect(times).toHaveLength(2);
+    expect(Math.abs(times[0] - 6 * 3600)).toBeLessThan(15 * 60);
+    expect(Math.abs(times[1] - 2 * 3600)).toBeLessThan(15 * 60);
+  });
+
+  it("needs everything inside the same stretch", () => {
+    const apart = [poi(2, bitOf("fuel")), poi(6, bitOf("food"))];
+    expect(findElsewhere(route, apart, ["fuel", "food"], 18000)).toEqual({ times: [], missing: [] });
+    const close = [poi(2, bitOf("fuel")), poi(2.5, bitOf("food"))];
+    const [t] = findElsewhere(route, close, ["fuel", "food"], 18000).times;
+    expect(t).toBeGreaterThan(2.5 * 3600 - 1500 - 200);
+    expect(t).toBeLessThan(2 * 3600 + 1500 + 200);
+  });
+
+  it("names what is nowhere on the route and ignores places too far away", () => {
+    expect(findElsewhere(route, [poi(2, bitOf("fuel")), poi(3, bitOf("food"), 0.06)], ["fuel", "food"], 0).missing).toEqual(["food"]);
+  });
+
+  it("does not offer again a moment that failed", () => {
+    const [t] = findElsewhere(route, [poi(6, both)], ["fuel"], 18000).times;
+    expect(findElsewhere(route, [poi(6, both)], ["fuel"], 18000, [t]).times).not.toContain(t);
+  });
+
+  it.each(DEMOS)("every offered moment gives candidates for all needs ($id)", (d) => {
+    const { route: r } = JSON.parse(readFileSync(`public/demo/${d.id}.json`, "utf8"));
+    const index: string[] = JSON.parse(readFileSync("public/pois/index.json", "utf8"));
+    const pois: Poi[] = index.flatMap((k) => JSON.parse(readFileSync(`public/pois/${k}.json`, "utf8"))
+      .map(([lng, lat, mask, name]: [number, number, number, string]) => ({ lng, lat, mask, name })));
+    for (const needs of [["camper", "truck"], ["ev", "glutenfree", "camper"], ["rest", "hotel", "playground"]] as const) {
+      for (const at of [0, r.duration / 2, r.duration]) {
+        for (const t of findElsewhere(r, pois, [...needs], at).times) {
+          const line = sliceRoute(r, Math.max(0, t - HALF_WINDOW), Math.min(r.duration, t + HALF_WINDOW));
+          const mask = buildStops(pois, line, [...needs]).reduce((m, s) => m | s.mask, 0);
+          expect(mask).toBe(2 ** needs.length - 1);
+        }
+      }
+    }
   });
 });
